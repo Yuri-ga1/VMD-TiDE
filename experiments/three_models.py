@@ -10,7 +10,6 @@ import joblib
 import numpy as np
 import pandas as pd
 import torch
-import torch._utils
 import matplotlib.pyplot as plt
 from darts import TimeSeries
 from darts.models import TiDEModel
