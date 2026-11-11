@@ -1,7 +1,3 @@
-"""Independent Colab experiment: A=VMD/TiDE; B=VMD/TiDE+causal SN; C=A+SN TiDE+Ridge.
-
-Does not use PostgreSQL or modify the original ForecastModel/TideModel.
-"""
 from __future__ import annotations
 import json
 import hashlib
@@ -133,6 +129,8 @@ def ts(values, index, name):
 
 
 def make_model(cfg: Config, name: str):
+    import torch
+    import torch._utils
     from darts.models import TiDEModel
     from darts.models.forecasting import torch_forecasting_model as tfm
     # Match the actual Trainer used by Darts, even if both Lightning packages exist.
@@ -141,7 +139,6 @@ def make_model(cfg: Config, name: str):
                  else 'pytorch_lightning')
     EarlyStopping = importlib.import_module(f'{namespace}.callbacks').EarlyStopping
     stopper = EarlyStopping(**TRAINING_PROTOCOL['early_stopping'])
-    import torch
     checkpoint_work_dir = Path(cfg.output_dir) / '.darts_checkpoints'
     if (checkpoint_work_dir / name).exists():
         # An interrupted fit may have checkpoints but no final export. Keep them.
