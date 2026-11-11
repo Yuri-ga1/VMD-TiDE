@@ -1,6 +1,7 @@
 from sqlalchemy import create_engine, Column, Integer, Date
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy import inspect
 from dotenv import load_dotenv
 import os
 
@@ -59,7 +60,6 @@ if __name__ == "__main__":
         engine = setup_database(schema=os.getenv("DB_SCHEMA", "public"))  # Use schema from .env or default to 'public'
 
         # Verify that the table was created
-        from sqlalchemy import inspect
         inspector = inspect(engine)
         tables = inspector.get_table_names(schema=os.getenv("DB_SCHEMA", "public"))
         print("Tables in database:", tables)

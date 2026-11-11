@@ -1,8 +1,10 @@
-def histPlot(data, info, ROWS, COLUMNS, BINS, filename):
-    from matplotlib.backends.backend_pdf import PdfPages
-    import matplotlib.pyplot as plt
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_pdf import PdfPages
+from matplotlib.ticker import MultipleLocator
+from matplotlib_venn import venn2, venn2_circles, venn3, venn3_circles
 
-    import numpy as np
+def histPlot(data, info, ROWS, COLUMNS, BINS, filename):
     # Количество строк и столбоц на одной строке
 
     # Создание файла.
@@ -74,10 +76,6 @@ def histPlot(data, info, ROWS, COLUMNS, BINS, filename):
 
 
 def Plot(data, info, ROWS, COLUMNS, filename):
-    from matplotlib.backends.backend_pdf import PdfPages
-    import matplotlib.pyplot as plt
-    from matplotlib.ticker import MultipleLocator
-
     # Количество строк и столбоц на одной строке
 
     # Создание файла.
@@ -159,9 +157,6 @@ def Plot(data, info, ROWS, COLUMNS, filename):
 
 
 def PlotSingle(data, info, filename):
-    from matplotlib.backends.backend_pdf import PdfPages
-    import matplotlib.pyplot as plt
-
     # Количество строк и столбоц на одной строке
 
     # Создание файла.
@@ -191,10 +186,6 @@ def PlotSingle(data, info, filename):
 
 
 def table(data, filename):
-    from matplotlib.backends.backend_pdf import PdfPages
-    import matplotlib.pyplot as plt
-
-    import numpy as np
     # Количество строк и столбоц на одной строке
 
     # Создание файла.
@@ -222,10 +213,6 @@ def table(data, filename):
 
 
 def histSingle(data, info, BINS, filename):
-    from matplotlib.backends.backend_pdf import PdfPages
-    import matplotlib.pyplot as plt
-
-    import numpy as np
     # Количество строк и столбоц на одной строке
 
     # Создание файла.
@@ -283,10 +270,6 @@ def histSingle(data, info, BINS, filename):
 
 
 def hist2Plot(data, info, ROWS, COLUMNS, filename):
-    from matplotlib.backends.backend_pdf import PdfPages
-    import matplotlib.pyplot as plt
-
-    import numpy as np
     # Количество строк и столбоц на одной строке
 
     # Создание файла.
@@ -343,10 +326,6 @@ def hist2Plot(data, info, ROWS, COLUMNS, filename):
 
 
 def Venn(data, info, filename):
-    from matplotlib.backends.backend_pdf import PdfPages
-    import matplotlib.pyplot as plt
-    from matplotlib_venn import venn3, venn3_circles
-    from matplotlib_venn import venn2, venn2_circles
 
     # Количество строк и столбоц на одной строке
 

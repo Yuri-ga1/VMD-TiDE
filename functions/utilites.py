@@ -84,8 +84,6 @@ def check_new_real():
         return False
 
 def log_message(text):
-    from datetime import datetime
-
     # Get current time formatted as YYYY-MM-DD HH:MM
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
 

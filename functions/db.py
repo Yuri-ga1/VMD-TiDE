@@ -6,6 +6,7 @@ from contextlib import closing
 import sqlalchemy
 import os
 import numpy as np
+import pandas as pd
 from psycopg2.extensions import register_adapter, AsIs
 
 def addapt_numpy_float64(numpy_float64):
@@ -53,7 +54,6 @@ def get_rows(query):
 
 
 def select_rows(query):
-    import pandas as pd
     config = dotenv_values("/home/user/projects/f107/.env")
 
     conn = psycopg2.connect("host='{}' dbname='{}' user={} password={}".format(

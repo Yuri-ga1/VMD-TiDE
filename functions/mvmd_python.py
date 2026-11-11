@@ -1,3 +1,5 @@
+import torch
+
 def mvmd(signal, alpha, tau, K, DC, init, tol, max_N):
     # ---------------------
     #  signal  - the time domain signal (1D) to be decomposed
@@ -20,8 +22,6 @@ def mvmd(signal, alpha, tau, K, DC, init, tol, max_N):
     # import numpy as np
     # import math
     # import matplotlib.pyplot as plt
-    import torch
-
     # Period and sampling frequency of input signal
     C, T = signal.shape # T:length of signal C:  channel number
     fs = 1 / float(T)

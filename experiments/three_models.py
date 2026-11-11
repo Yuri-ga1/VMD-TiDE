@@ -2,7 +2,6 @@ from __future__ import annotations
 import json
 import hashlib
 import random
-import importlib
 import uuid
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -10,6 +9,12 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+import torch
+import torch._utils
+import matplotlib.pyplot as plt
+from darts import TimeSeries
+from darts.models import TiDEModel
+from darts.models.forecasting import torch_forecasting_model as tfm
 from sklearn.linear_model import RidgeCV
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from sklearn.preprocessing import MinMaxScaler
@@ -28,22 +33,20 @@ TRAINING_PROTOCOL = {
 class Config:
     csv_path: str = "dataset.csv"
     output_dir: str = "models/VMD_TiDE_ABC_h7_train1954_test2009"
-    target: str = "F10.7adj"   # or F10.7obs
+    target: str = "F10.7adj"
     start: str = "1954-01-02"
     train_end: str = "1986-08-31"
     fusion_end: str = "2008-12-31"
-    test_end: str | None = None  # resolved from the last joint CSV observation
+    test_end: str | None = None
     horizon: int = 7
     context: int = 126
     epochs: int = 50
     batch_size: int = 256
-    stride: int = 27  # non-overlapping forecast origins if >= horizon
+    stride: int = 27
     max_origins: int | None = None
-    # Set None to decompose every available historical F10.7 value at the origin;
-    # default 2048 speeds up repeated causal decomposition, but creates train/predict shift.
     vmd_history: int | None = 2048
     random_seed: int = 42
-    save_checkpoints: bool = True  # best-checkpoint export always requires checkpointing
+    save_checkpoints: bool = True
     alpha: int = 2626
     hidden_size: int = 128
     num_encoder_layers: int = 1
@@ -53,7 +56,6 @@ class Config:
     temporal_width_future: int = 4
     temporal_decoder_hidden: int = 32
     dropout: float = 0.1
-
 
 def load_data(cfg: Config) -> pd.DataFrame:
     df = pd.read_csv(cfg.csv_path)
@@ -80,15 +82,12 @@ def load_data(cfg: Config) -> pd.DataFrame:
     df = df.loc[:cfg.test_end]
     if pd.Timestamp(cfg.train_end) >= pd.Timestamp(cfg.fusion_end) or pd.Timestamp(cfg.fusion_end) >= pd.Timestamp(cfg.test_end):
         raise ValueError("Require train_end < fusion_end < test_end")
-    # Only training data may be interpolated bidirectionally. For val/test, use forward-fill
-    # *as an input* (no future information); original observations kept for metrics.
     train = df.loc[:cfg.train_end]
     if train["f107"].notna().sum() < cfg.context + cfg.horizon + 20:
         raise ValueError("Not enough training observations")
     filled = df.copy()
     filled.loc[train.index, "f107"] = train["f107"].interpolate(method="time", limit=5, limit_area="inside")
     filled.loc[train.index, "sn"] = train["sn"].interpolate(method="time", limit=5, limit_area="inside")
-    # Causal after the training cutoff; will not backfill across cutoff.
     filled["f107"] = filled["f107"].ffill()
     filled["sn"] = filled["sn"].ffill()
     filled["f107_original"] = df["f107"]
@@ -97,14 +96,12 @@ def load_data(cfg: Config) -> pd.DataFrame:
         raise ValueError("Missing leading values; change start date")
     return filled
 
-
 def vmd12(values: np.ndarray, alpha=2626) -> np.ndarray:
     """Original two-stage 3-mode VMD and residual branch; 12 components."""
     values = np.asarray(values, dtype=np.float64)
     n = len(values)
     if n < 32:
         raise ValueError("Too few samples for VMD")
-    # vmdpy can drop one sample for odd signal lengths. Append last sample temporarily.
     x = values if n % 2 == 0 else np.r_[values, values[-1]]
     def split(y):
         u, _, _ = VMD(y, alpha, 0, 3, 0, 1, 1e-7)
@@ -112,36 +109,23 @@ def vmd12(values: np.ndarray, alpha=2626) -> np.ndarray:
     top = split(x)
     resid = x - top.sum(axis=0)
     second = [split(signal) for signal in [top[0], top[1], top[2], resid]]
-    # Align to the author's mode names (IMF1_1, IMF2_1, IMF3_1, etc. are labels only).
     result = np.vstack(second).T[:n]
     if result.shape != (n,12):
         raise RuntimeError(f"Unexpected VMD output {result.shape}")
     return result.astype(np.float32)
 
-
 def ts(values, index, name):
-    from darts import TimeSeries
     values = np.asarray(values, dtype=np.float32).reshape(-1, 1)
     index = pd.DatetimeIndex(index)
     if len(values) != len(index) or not np.isfinite(values).all():
         raise ValueError(f"Invalid values/index for {name}")
     return TimeSeries.from_times_and_values(index, values, columns=[name], freq="D")
 
-
 def make_model(cfg: Config, name: str):
-    import torch
-    import torch._utils
-    from darts.models import TiDEModel
-    from darts.models.forecasting import torch_forecasting_model as tfm
-    # Match the actual Trainer used by Darts, even if both Lightning packages exist.
-    trainer_class = tfm.pl.Trainer
-    namespace = ('lightning.pytorch' if trainer_class.__module__.startswith('lightning.')
-                 else 'pytorch_lightning')
-    EarlyStopping = importlib.import_module(f'{namespace}.callbacks').EarlyStopping
+    EarlyStopping = tfm.pl.callbacks.EarlyStopping
     stopper = EarlyStopping(**TRAINING_PROTOCOL['early_stopping'])
     checkpoint_work_dir = Path(cfg.output_dir) / '.darts_checkpoints'
     if (checkpoint_work_dir / name).exists():
-        # An interrupted fit may have checkpoints but no final export. Keep them.
         checkpoint_work_dir = checkpoint_work_dir / f'retry-{uuid.uuid4().hex}'
     params = {
         'input_chunk_length':cfg.context,
@@ -160,7 +144,7 @@ def make_model(cfg: Config, name: str):
         'batch_size':cfg.batch_size,
         'random_state':cfg.random_seed,
         'model_name':name,
-        'save_checkpoints':True,  # Darts installs ModelCheckpoint(monitor='val_loss')
+        'save_checkpoints':True,
         'work_dir':str(checkpoint_work_dir),
         'nr_epochs_val_period':1,
         'force_reset':False,
@@ -168,13 +152,9 @@ def make_model(cfg: Config, name: str):
     }
     return TiDEModel(**params)
 
-
 def _future_cov(sn: np.ndarray, dates: pd.DatetimeIndex, horizon: int, name="sn_lag"):
-    # At prediction time t, values of covariate dated t+1..t+h are SN(t+1-h)..SN(t).
-    # Therefore all covariates required for next-h prediction are already observed.
     shifted = pd.Series(sn, index=dates).shift(horizon)
     return ts(shifted.to_numpy()[horizon:], dates[horizon:], name)
-
 
 def _fingerprint(cfg):
     settings = asdict(cfg)
@@ -183,7 +163,6 @@ def _fingerprint(cfg):
     settings['csv_sha256'] = hashlib.sha256(Path(cfg.csv_path).read_bytes()).hexdigest()
     settings['training_protocol'] = TRAINING_PROTOCOL
     return hashlib.sha256(json.dumps(settings, sort_keys=True).encode()).hexdigest()
-
 
 def _check_config(cfg, *, initialize=False, force=False):
     """Refuse legacy/mismatched artifacts before writing anything or training."""
@@ -207,16 +186,13 @@ def _check_config(cfg, *, initialize=False, force=False):
             (out / 'config.json').write_text(json.dumps(
                 {**asdict(cfg), 'training_protocol': TRAINING_PROTOCOL}, indent=2), encoding='utf-8')
 
-
 def _component_complete(path):
     return all(p.is_file() for p in (path, Path(str(path) + '.ckpt'),
                                     path.with_suffix('.scaler.joblib'),
                                     path.with_suffix('.training.json')))
 
-
 def _save_best(model, cfg, path, scaler):
     """Reload Darts' best val_loss checkpoint before exporting each component."""
-    import torch
     trainer = model.trainer
     checkpoint = trainer.checkpoint_callback
     if not checkpoint.best_model_path or checkpoint.best_model_score is None:
@@ -224,7 +200,6 @@ def _save_best(model, cfg, path, scaler):
     best = type(model).load_from_checkpoint(
         model_name=model.model_name, work_dir=model.work_dir, best=True,
         map_location='cpu')
-    # Inspect the selected checkpoint, not the final Trainer state.
     state = torch.load(checkpoint.best_model_path, map_location='cpu', weights_only=False)
     best_epoch = int(state['epoch']) + 1
     stopped_epoch = int(trainer.current_epoch)
@@ -239,7 +214,6 @@ def _save_best(model, cfg, path, scaler):
           f'Trainer stop epoch={stopped_epoch}; saved best epoch={best_epoch}, '
           f'val_loss={metadata["best_val_loss"]:.6g}')
 
-
 def _mark_complete(out, variant, names):
     if all(_component_complete(out / 'weights' / variant / f'{name}.pt') for name in names):
         marker = out / f'{variant}_complete.json'
@@ -249,12 +223,10 @@ def _mark_complete(out, variant, names):
                  'training_protocol': TRAINING_PROTOCOL}, indent=2), encoding='utf-8')
         print(f'Variant {variant}: all {len(names)} components saved')
 
-
 def _component_frequencies(values):
     """Diagnostic only: spectral centroids, without reordering/modifying VMD modes."""
     power = np.abs(np.fft.rfft(values - values.mean(axis=0), axis=0)) ** 2
     return (np.fft.rfftfreq(len(values)) @ power / np.maximum(power.sum(axis=0), 1e-30)).tolist()
-
 
 def train_all(cfg: Config, df: pd.DataFrame, force=False):
     """Train A (12 TiDE), B (12 TiDE with lagged-SN future covariate), and SN (1 TiDE)."""
@@ -271,10 +243,7 @@ def train_all(cfg: Config, df: pd.DataFrame, force=False):
     train_df = df.loc[:cfg.train_end]
     if len(train_df) < cfg.context + cfg.horizon + 30:
         raise ValueError("Training segment too short")
-    # VMD is fitted on training data only; future data never enters targets for training.
     components = vmd12(train_df.f107.to_numpy(), cfg.alpha)
-    # A separate decomposition ends at fusion_end. Test values never enter either VMD.
-    # Keep the same 2-stage algorithm and component order for both decompositions.
     val_prefix = df.loc[:cfg.fusion_end]
     val_df = val_prefix.loc[pd.Timestamp(cfg.train_end) + pd.Timedelta(days=1):]
     if len(val_df) < cfg.context + cfg.horizon:
@@ -293,7 +262,6 @@ def train_all(cfg: Config, df: pd.DataFrame, force=False):
     sn = train_df.sn.to_numpy(np.float32)
     dates = train_df.index
     sn_cov_values = pd.Series(sn, index=dates).shift(cfg.horizon)
-    # Both target and lagged covariates start on the SAME valid date.
     cut = cfg.horizon
     cov = ts(sn_cov_values.to_numpy()[cut:], dates[cut:], 'sn_lag')
     val_cov_values = df.loc[:cfg.fusion_end, 'sn'].shift(cfg.horizon).loc[val_df.index]
@@ -343,9 +311,7 @@ def train_all(cfg: Config, df: pd.DataFrame, force=False):
     _mark_complete(out, 'SN', ['sn'])
     return saved
 
-
 def load_models(cfg: Config):
-    from darts.models import TiDEModel
     out = Path(cfg.output_dir)
     _check_config(cfg)
     loaded={}
@@ -358,7 +324,6 @@ def load_models(cfg: Config):
     if not _component_complete(path): raise FileNotFoundError(f'Incomplete component: {path}')
     loaded[('SN','sn')] = (TiDEModel.load(str(path), map_location='cpu'),joblib.load(path.with_suffix('.scaler.joblib')))
     return loaded
-
 
 def forecast_at(cfg: Config, df:pd.DataFrame, models:dict, origin:pd.Timestamp):
     """Predict a full horizon using data no later than `origin`."""
@@ -373,12 +338,10 @@ def forecast_at(cfg: Config, df:pd.DataFrame, models:dict, origin:pd.Timestamp):
     comps=vmd12(comp_input, cfg.alpha)
     dates = history.index
     horizon=cfg.horizon
-    # Supply future covariate values through origin+H, constructed ONLY from SN <= origin.
     cov_date = pd.date_range(dates[0], origin + pd.Timedelta(days=horizon), freq='D')
     source_dates = cov_date - pd.Timedelta(days=horizon)
     observed_sn = df.loc[:origin, 'sn']
     cov_values = observed_sn.reindex(source_dates).to_numpy(dtype=np.float32)
-    # Match the Colab boundary fill; only dates before the dataset start may be absent.
     leading = source_dates < df.index.min()
     cov_values[leading] = observed_sn.iloc[0]
     if not np.isfinite(cov_values).all():
@@ -403,7 +366,6 @@ def forecast_at(cfg: Config, df:pd.DataFrame, models:dict, origin:pd.Timestamp):
     forecast['SN'] = scaler.inverse_transform(sn_pred).ravel()
     return forecast
 
-
 def origins_for(df:pd.DataFrame, cfg:Config, part:str):
     if part == 'fusion':
         start = pd.Timestamp(cfg.train_end) + pd.Timedelta(days=1)
@@ -418,7 +380,6 @@ def origins_for(df:pd.DataFrame, cfg:Config, part:str):
     if cfg.max_origins is not None:
         dates = dates[:cfg.max_origins]
     return dates
-
 
 def backtest(cfg: Config, df:pd.DataFrame, models:dict, part:str):
     rows=[]
@@ -437,9 +398,7 @@ def backtest(cfg: Config, df:pd.DataFrame, models:dict, part:str):
         raise ValueError(f'No evaluable predictions for {part}')
     return frame
 
-
 def merge_c(cfg:Config, fusion:pd.DataFrame, test:pd.DataFrame):
-    # Fusion uses origin forecasts from the existing validation period only.
     Xf=fusion[['A','SN_prediction']].values
     Xt=test[['A','SN_prediction']].values
     out=Path(cfg.output_dir)
@@ -461,7 +420,6 @@ def merge_c(cfg:Config, fusion:pd.DataFrame, test:pd.DataFrame):
              'training_protocol': TRAINING_PROTOCOL}, indent=2), encoding='utf-8')
     return fusion,test,ridge
 
-
 def evaluate(frame:pd.DataFrame):
     rows=[]
     for key in ('A','B','C'):
@@ -475,9 +433,7 @@ def evaluate(frame:pd.DataFrame):
     result['MAE_improvement_vs_A_pct']=100*(baseline-result.MAE)/baseline
     return result
 
-
 def plot_results(cfg:Config, test:pd.DataFrame, metrics:pd.DataFrame):
-    import matplotlib.pyplot as plt
     out=Path(cfg.output_dir); out.mkdir(parents=True,exist_ok=True)
     def save_figure(fig, name):
         if not (out / name).exists():
@@ -497,7 +453,6 @@ def plot_results(cfg:Config, test:pd.DataFrame, metrics:pd.DataFrame):
     fig,ax=plt.subplots(figsize=(8,4));metrics['MAE_improvement_vs_A_pct'].plot.bar(ax=ax,rot=0)
     ax.axhline(0,color='black',lw=.8);ax.set(ylabel='%',title='MAE improvement versus A')
     fig.tight_layout();save_figure(fig, 'improvement.png');plt.show()
-
 
 def run(cfg:Config, force_train=False):
     random.seed(cfg.random_seed);np.random.seed(cfg.random_seed)
