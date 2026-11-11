@@ -22,6 +22,11 @@ Here’s the updated content of your file with corrected step numbering, a **Tab
 ## Overview
 The project contains a Python implementation for the VMD-TiDE model. This repository requires setting up a new environment with Python 3.10 and installing dependencies from `requirements.txt`. Follow the instructions below to set up and run the project.
 
+### Эксперимент F10.7 + SN в Google Colab
+
+[Открыть тетрадь из fork в Colab](https://colab.research.google.com/github/Yuri-ga1/VMD-TiDE/blob/master/notebooks/F107_SN.ipynb)
+
+
 ---
 
 ## Prerequisites

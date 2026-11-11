@@ -5,6 +5,7 @@ db/*
 .env
 *ipynb
 __pycache__/
+.pytest_cache/
 darts_logs/*
 screenshots/*
 models/*
@@ -16,4 +17,6 @@ f30/*
 generate_requirements.py
 regular_screenshot.py
 !example.ipynb
+!notebooks/
+!notebooks/F107_SN.ipynb
 regular_job.log
