@@ -26,6 +26,8 @@ TRAINING_PROTOCOL = {
     'early_stopping': {'monitor': 'val_loss', 'patience': 10,
                        'min_delta': 0.0001, 'mode': 'min', 'verbose': True},
     'validation_vmd': 'prefix-through-fusion-end; unchanged-mode-order',
+    'B_covariates': {'type': 'past_covariates', 'source': 'SN',
+                     'shift_days': 0, 'dates': 'same-as-target-context'},
 }
 
 @dataclass
@@ -151,10 +153,6 @@ def make_model(cfg: Config, name: str):
     }
     return TiDEModel(**params)
 
-def _future_cov(sn: np.ndarray, dates: pd.DatetimeIndex, horizon: int, name="sn_lag"):
-    shifted = pd.Series(sn, index=dates).shift(horizon)
-    return ts(shifted.to_numpy()[horizon:], dates[horizon:], name)
-
 def _fingerprint(cfg):
     settings = asdict(cfg)
     for key in ('output_dir', 'csv_path', 'save_checkpoints'):
@@ -172,7 +170,7 @@ def _check_config(cfg, *, initialize=False, force=False):
     occupied = out.exists() and any(out.iterdir())
     digest = _fingerprint(cfg)
     if occupied and (not manifest.exists() or manifest.read_text().strip() != digest):
-        raise RuntimeError('Existing results are legacy or incompatible with val-loss-best-v1. '
+        raise RuntimeError(f'Existing results are legacy or incompatible with {TRAINING_PROTOCOL["version"]}. '
                            'They were preserved. Choose a NEW output_dir; no automatic retraining.')
     if force and occupied:
         raise RuntimeError('force_train cannot overwrite existing results. Choose a NEW output_dir.')
@@ -228,7 +226,7 @@ def _component_frequencies(values):
     return (np.fft.rfftfreq(len(values)) @ power / np.maximum(power.sum(axis=0), 1e-30)).tolist()
 
 def train_all(cfg: Config, df: pd.DataFrame, force=False):
-    """Train A (12 TiDE), B (12 TiDE with lagged-SN future covariate), and SN (1 TiDE)."""
+    """Train A (12 TiDE), B (12 TiDE with synchronous SN history), and SN (1 TiDE)."""
     out = Path(cfg.output_dir)
     _check_config(cfg, initialize=True, force=force)
     all_paths = [out / 'weights' / variant / f'{name}.pt'
@@ -260,11 +258,8 @@ def train_all(cfg: Config, df: pd.DataFrame, force=False):
         {'train': diagnostics['train_centroids'], 'validation': diagnostics['validation_centroids']}, index=MODES))
     sn = train_df.sn.to_numpy(np.float32)
     dates = train_df.index
-    sn_cov_values = pd.Series(sn, index=dates).shift(cfg.horizon)
-    cut = cfg.horizon
-    cov = ts(sn_cov_values.to_numpy()[cut:], dates[cut:], 'sn_lag')
-    val_cov_values = df.loc[:cfg.fusion_end, 'sn'].shift(cfg.horizon).loc[val_df.index]
-    val_cov = ts(val_cov_values.to_numpy(), val_df.index, 'sn_lag')
+    cov = ts(sn, dates, 'sn')
+    val_cov = ts(val_df.sn.to_numpy(np.float32), val_df.index, 'sn')
     saved = {}
     for variant in ('A','B'):
         for i, name in enumerate(MODES):
@@ -283,9 +278,8 @@ def train_all(cfg: Config, df: pd.DataFrame, force=False):
             val_scaled = scaler.transform(val_components[:, i:i+1]).ravel()
             kwargs = {'series':series, 'val_series':ts(val_scaled, val_df.index, name)}
             if variant == 'B':
-                kwargs['series'] = ts(scaled[cut:], dates[cut:], name)
-                kwargs['future_covariates'] = cov
-                kwargs['val_future_covariates'] = val_cov
+                kwargs['past_covariates'] = cov
+                kwargs['val_past_covariates'] = val_cov
             print(f'Training {variant} {name} ({i+1}/12)')
             model.fit(**kwargs, verbose=False)
             _save_best(model, cfg, path, scaler)
@@ -330,6 +324,8 @@ def forecast_at(cfg: Config, df:pd.DataFrame, models:dict, origin:pd.Timestamp):
     if origin not in df.index:
         raise ValueError('origin must be an available observation date')
     history = df.loc[:origin]
+    if len(history) < cfg.context:
+        raise ValueError('Not enough history for the input context')
     comp_input = history.f107.to_numpy()
     if cfg.vmd_history is not None:
         comp_input = comp_input[-cfg.vmd_history:]
@@ -337,15 +333,7 @@ def forecast_at(cfg: Config, df:pd.DataFrame, models:dict, origin:pd.Timestamp):
     comps=vmd12(comp_input, cfg.alpha)
     dates = history.index
     horizon=cfg.horizon
-    cov_date = pd.date_range(dates[0], origin + pd.Timedelta(days=horizon), freq='D')
-    source_dates = cov_date - pd.Timedelta(days=horizon)
-    observed_sn = df.loc[:origin, 'sn']
-    cov_values = observed_sn.reindex(source_dates).to_numpy(dtype=np.float32)
-    leading = source_dates < df.index.min()
-    cov_values[leading] = observed_sn.iloc[0]
-    if not np.isfinite(cov_values).all():
-        raise ValueError('NaN in forecast SN covariates')
-    cov = ts(cov_values, cov_date, 'sn_lag')
+    cov = ts(history.sn.to_numpy()[-cfg.context:], dates[-cfg.context:], 'sn')
     forecast = {}
     for variant in ('A','B'):
         p = np.zeros(horizon, dtype=np.float64)
@@ -354,12 +342,14 @@ def forecast_at(cfg: Config, df:pd.DataFrame, models:dict, origin:pd.Timestamp):
             scaled = scaler.transform(comps[:,i:i+1]).ravel()
             series = ts(scaled, dates, name)
             kwargs = {'n':horizon, 'series':series}
-            if variant=='B': kwargs['future_covariates']=cov
+            if variant=='B':
+                kwargs['series'] = series[-cfg.context:]
+                kwargs['past_covariates'] = cov
             yhat=m.predict(**kwargs, verbose=False).values().reshape(-1,1)
             p += scaler.inverse_transform(yhat).ravel()
         forecast[variant]=p
     m, scaler = models[('SN','sn')]
-    sn_history = df.loc[:origin,'sn']
+    sn_history = df.loc[:origin,'sn'].tail(cfg.context)
     sn_scaled = scaler.transform(sn_history.to_numpy().reshape(-1,1)).ravel()
     sn_pred = m.predict(n=horizon,series=ts(sn_scaled,sn_history.index,'sn'),verbose=False).values().reshape(-1,1)
     forecast['SN'] = scaler.inverse_transform(sn_pred).ravel()
