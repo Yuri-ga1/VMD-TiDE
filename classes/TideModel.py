@@ -52,6 +52,9 @@ class TideModel:
         self.model_name = model_name
         self.context_length = context_length
         self.prediction_length = prediction_length
+        self.work_dir = kwargs.get('work_dir')
+        self.force_reset = kwargs.get('force_reset', True)
+        self.extra_callbacks = kwargs.get('extra_callbacks', [])
         env_name = 'default' if self.tuned == 'default' else f"p{self.prediction_length}_{self.target}"
         params = dotenv_values(f"hyperparams/{env_name}.env")
         self.params = params
@@ -60,7 +63,7 @@ class TideModel:
         return {
             "pl_trainer_kwargs": {
                 "accelerator": self.device,
-                "callbacks": [TFMProgressBar(enable_train_bar_only=True)],
+                "callbacks": [TFMProgressBar(enable_train_bar_only=True), *self.extra_callbacks],
             }
         }
 
@@ -180,24 +183,30 @@ class TideModel:
             batch_size=512,
             random_state=42,
             model_name=model_name,
+            work_dir=self.work_dir,
             save_checkpoints=True,
-            force_reset=True,
+            force_reset=self.force_reset,
             **self.generate_torch_kwargs(),
         )
         return model
 
     def load_best_model(self):
         name = self.get_model_name()
-        return TiDEModel.load_from_checkpoint(model_name=name, best=True)
+        return TiDEModel.load_from_checkpoint(model_name=name, work_dir=self.work_dir, best=True)
 
     def load_model(self):
         model = self.prepare_model()
         model.load_weights(self.get_model_path())
         return model
 
-    def train(self):
+    def train(self, save_path=None, resume=False):
         data, scaler = self.process_data()
-        model = self.prepare_model()
+        if resume:
+            model = TiDEModel.load_from_checkpoint(
+                model_name=self.get_model_name(), work_dir=self.work_dir, best=False
+            )
+        else:
+            model = self.prepare_model()
         model.fit(
             series=data['target']['train'],
             val_series=data['target']['val'],
@@ -205,10 +214,11 @@ class TideModel:
             # val_past_covariates=data['past']['val'],
             # future_covariates=data['future']['train'],
             # val_future_covariates=data['future']['val'],
-            verbose=True
+            verbose=True,
+            load_best=True,
         )
-        best_model = self.load_best_model()
-        best_model.save(self.get_model_path())
+        model.save(save_path or self.get_model_path())
+        return model, scaler
 
     def predict_all(self):
         model = self.load_model()
