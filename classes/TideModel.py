@@ -8,7 +8,7 @@ from darts.utils.callbacks import TFMProgressBar
 from darts.models import TiDEModel
 from darts.dataprocessing.transformers import Scaler, MissingValuesFiller
 from sklearn.preprocessing import MinMaxScaler
-from lightning.pytorch.callbacks.early_stopping import EarlyStopping
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from darts.metrics.metrics import mape, mae, rmse, smape
 import functions.db as db
 import joblib
