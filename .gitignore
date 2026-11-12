@@ -16,4 +16,5 @@ f30/*
 generate_requirements.py
 regular_screenshot.py
 !example.ipynb
+!notebooks/Original_VMD_TiDE_7day_Colab.ipynb
 regular_job.log

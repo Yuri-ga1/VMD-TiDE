@@ -124,7 +124,10 @@ def setup_database(schema=None):
 
     if tables_to_create:
         print(f"Creating tables: {', '.join(tables_to_create)}")
-        Base.metadata.create_all(engine, tables=[Base.metadata.tables[table] for table in tables_to_create])
+        Base.metadata.create_all(engine, tables=[
+            table for table in Base.metadata.sorted_tables
+            if table.name in tables_to_create
+        ])
     else:
         print("All tables already exist. No new tables created.")
 
