@@ -113,6 +113,9 @@ python3 migrate.py
 ## Running the Project
 How to train and predict with the model can be found in the `example.ipynb` Jupyter Notebook. Alternatively, you can run scripts from the terminal.
 
+Open the original VMD-TiDE-12 7-day forecasting notebook in Google Colab:
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Yuri-ga1/VMD-TiDE/blob/original-model/notebooks/Original_VMD_TiDE_7day_Colab.ipynb)
+
 Run the Decomposition of Original Signal:
 ```bash
 python3 data_decompose.py
